@@ -1,0 +1,102 @@
+SWIG_BIN=$(SWIGDIR)/swig
+
+PROJECT_ROOT ?= ../..
+COS_VERSION ?= 2210
+PYTHON_TARGET ?= 3.8
+
+PYTHON_EXE = $(PYTHON_HOME)/python.exe
+# Set python lib and extra flags
+EXTRA_SWIG_FLAGS=-py3
+
+ifeq ($(PYTHON_TARGET),3.7)
+	PYTHON_LDFLAGS=$(PYTHON_HOME)/libs/python37.lib
+else ifeq ($(PYTHON_TARGET),3.8)
+	PYTHON_LDFLAGS=$(PYTHON_HOME)/libs/python38.lib
+else ifeq ($(PYTHON_TARGET),3.9)
+	PYTHON_LDFLAGS=$(PYTHON_HOME)/libs/python39.lib
+else ifeq ($(PYTHON_TARGET),3.10)
+	PYTHON_LDFLAGS=$(PYTHON_HOME)/libs/python310.lib
+endif
+
+# all output files of this process go there
+OUTPUT_DIR = $(COS_VERSION)/$(PYTHON_TARGET)
+
+SWIG_FLAGS= -w401 -DILO_PORT_WIN64 -DIL_STD -v -module opl \
+	-outdir $(OUTPUT_DIR) \
+	-o $(OUTPUT_DIR)/opl_wrap.cxx \
+	-oh $(OUTPUT_DIR)/opl_wrap.h \
+	-python -c++ $(EXTRA_SWIG_FLAGS)
+
+PYTHON_INCDIR ?= $(PYTHON_HOME)/include
+
+CC = cl
+
+SRC_SWIG=$(PROJECT_ROOT)/src/main/swig
+
+# System/lib-format specific compile/link flags
+CSYSFLAGS  = /EHa /Ox /Zi /DNDEBUG /DILOUSEMT /D_REENTRANT /MD /DIL_STD /W3 /wd4244 /wd4511 /wd4512 /wd4505 /wd4334 /Zm1000 /D_CRT_SECURE_NO_DEPRECATE
+
+LDSYSFLAGS = /DLL /OPT:NOREF /INCREMENTAL:NO wsock32.lib user32.lib advapi32.lib /FIXED:NO /MANIFEST
+
+# Compilation and linking flags enabling Multi-threading
+CMTFLAGS = /DILOUSEMT /D_REENTRANT
+LDMTFLAGS =
+
+CFLAGS = $(CSYSFLAGS) $(CMTFLAGS)
+
+
+SYSTEM = x64_windows_msvc14
+LIBFORMAT = stat_mda
+
+LDFLAGS = \
+ $(PYTHON_LDFLAGS) \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/opl.lib \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/iljs.lib \
+ $(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/ilocplex.lib \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/cplex$(COS_VERSION).lib \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/cp.lib \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/concert.lib \
+ $(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/icuuc.lib \
+	$(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/icuin.lib \
+ $(OPLDIR)/lib/$(SYSTEM)/$(LIBFORMAT)/icudt.lib
+
+
+# Code optimization/debugging options
+DEBUG = -Ox -DNDEBUG
+POST_LINK = mt.exe /nologo -outputresource:$(OUTPUT_DIR)/_opl.pyd\;2 -manifest $(PROJECT_ROOT)/src/main/resources/manifest.x64_windows_vs2015
+
+INTERNAL_DIR = $(PROJECT_ROOT)/src/main/python/doopl/internal/opl$(COS_VERSION)
+
+all: generate compile link
+
+clean:
+	rm -rf $(COS_VERSION) $(PROJECT_ROOT)/target/reports/report*.py$(PYTHON_TARGET).*.xml $(INTERNAL_DIR)/*opl.*
+
+generate: $(SRC_SWIG)/opl.i
+	if [ ! -d $(COS_VERSION) ]; then mkdir $(COS_VERSION); fi
+	if [ ! -d $(OUTPUT_DIR) ]; then mkdir $(OUTPUT_DIR); fi
+	$(SWIG_BIN) $(SWIG_FLAGS) $(SRC_SWIG)/opl.i
+	mv $(OUTPUT_DIR)/opl_wrap.cxx $(OUTPUT_DIR)/opl_wrap.cxx.old
+	sed -e 's/new SwigDirector_IloOplDataSourceWrapper/new (arg2) SwigDirector_IloOplDataSourceWrapper/g' \
+		$(OUTPUT_DIR)/opl_wrap.cxx.old > $(OUTPUT_DIR)/opl_wrap.cxx
+
+compile: generate
+	$(CC) -c $(OUTPUT_DIR)/opl_wrap.cxx -I$(PYTHON_INCDIR) -I$(OPLDIR)/include $(CFLAGS) $(DEBUG) /Fo$(OUTPUT_DIR)/opl_wrap.obj
+
+link: compile
+	link $(LDSYSFLAGS) /OUT:$(OUTPUT_DIR)/_opl.pyd $(OUTPUT_DIR)/opl_wrap.obj $(LDFLAGS)
+	$(POST_LINK)
+
+install_in_src: generate compile link
+	if [ ! -d $(INTERNAL_DIR) ]; then mkdir $(INTERNAL_DIR); fi
+	cp -f $(OUTPUT_DIR)/opl.py $(OUTPUT_DIR)/_opl.pyd $(INTERNAL_DIR)
+
+test:
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) Mulprod.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) Convert.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) DataFeed.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) LagrangianRelaxation.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) LovingHearts.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) Mulprod_main.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) Relaxation.py
+	$(PYTHON_EXE) $(PROJECT_ROOT)/tools/run_test.py --opl_dir $(OPLDIR) --opl_version $(COS_VERSION) RunSeed.py
